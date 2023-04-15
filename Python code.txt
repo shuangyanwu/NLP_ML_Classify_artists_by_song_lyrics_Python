@@ -1,0 +1,352 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
+#!pip install langdetect -q
+
+import pandas as pd
+import numpy as np
+import re
+#import os
+import gensim
+from langdetect import detect_langs
+from sklearn.linear_model import SGDClassifier
+import nltk
+from sklearn.model_selection import train_test_split
+import random
+
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.model_selection import GridSearchCV
+import sklearn.metrics as skm
+import matplotlib.pyplot as plt
+from nltk.stem.snowball import SnowballStemmer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.pipeline import Pipeline
+
+
+
+############################################ import data
+drake = pd.read_csv("../data/Drake.csv")
+drake.shape
+LG = pd.read_csv("../data/LadyGaga.csv")
+LG.shape
+TS = pd.read_csv("../data/TaylorSwift.csv")
+TS.iloc[1,6]
+MR = pd.read_csv("../data/Maroon5.csv")
+MR.shape
+CP = pd.read_csv("../data/ColdPlay.csv")
+CP.shape
+
+
+AG = pd.read_csv("../data/ArianaGrande.csv")
+BY = pd.read_csv("../data/Beyonce.csv")
+BE = pd.read_csv("../data/BillieEilish.csv")
+BTS = pd.read_csv("../data/BTS.csv")
+BTS['Artist'] = 'BTS'
+#CB = pd.read_csv("../data/CardiB.csv")
+#CHPU = pd.read_csv("../data/CharliePuth.csv")
+DL = pd.read_csv("../data/DuaLipa.csv")
+ES = pd.read_csv("../data/EdSheeran.csv")
+EM = pd.read_csv("../data/Eminem.csv")
+JB = pd.read_csv("../data/JustinBieber.csv")
+KP = pd.read_csv("../data/KatyPerry.csv")
+#DJK = pd.read_csv("../data/Khalid.csv")
+NM = pd.read_csv("../data/NickiMinaj.csv")
+PM = pd.read_csv("../data/PostMalone.csv")
+RH = pd.read_csv("../data/Rihanna.csv")
+SG = pd.read_csv("../data/SelenaGomez.csv")
+
+
+#df = pd.concat([drake,LG,TS,MR,CP])
+#[drake,LG,TS,MR,CP,AG,BY,BE,BTS,CB,CHPU,DL,ES,EM,JB,KP,DJK,NM,PM,RH,SG]
+
+artists = [drake,LG,TS,MR,CP,AG,BY,BE,BTS,DL,ES,EM,JB,KP,NM,PM,RH,SG]
+
+NB_accuracy = {}
+SVM_accuracy = {}
+for k in range(3, len(artists)+1):
+    print("Iteration:", k)
+    NB_accuracy_temp = []
+    SVM_accuracy_temp = []
+    for i in range(8):
+        selection = random.choices([drake,LG,TS,MR,CP,AG,BY,BE,BTS,DL,ES,EM,JB,KP,NM,PM,RH,SG], k=k)
+        df = pd.concat(selection)
+
+
+        ############################################ data preprocessing
+        # Drop row with duplicated lyrics
+        df = df.drop_duplicates('Lyric')
+
+        # Drop rows with no lyrics
+        df.isnull().sum()
+        w = np.where(df['Lyric'].isnull())
+        df = df[df['Lyric'].notna()]
+
+        df['Lyric'] = df['Lyric'].astype(str)
+        df.iloc[342,6]
+
+        df = df[df['Lyric'].apply(lambda x: 'lyric' not in x)]
+
+        df_gb = df.groupby(by='Artist')
+        for artist_key in df_gb['Artist'].unique():
+            #print(artist_key[0])
+            artist_df = df_gb.get_group(artist_key[0])
+            #print(artist_df.shape)
+
+        # Drop rows with non-english lyrics
+
+        def get_eng_prob(text):
+            detections = detect_langs(text)
+            for detection in detections:
+                if detection.lang == 'en':
+                    return detection.prob
+            return 0
+
+        df['en_prob'] = df['Lyric'].map(get_eng_prob)
+
+        #print('Number of english songs: {}'.format(sum(df['en_prob'] >= 0.5)))
+        #print('Number of non-english songs: {}'.format(sum(df['en_prob'] < 0.5)))
+        df = df.loc[df['en_prob'] >= 0.5]
+
+        ############################################ Split train-test
+        y = df["Artist"]
+        X = df["Lyric"]
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+        ############################################ Vector
+        
+        count_vect = CountVectorizer()
+        X_train_counts = count_vect.fit_transform(X_train)
+        X_train_counts.shape
+
+        ############################################ TF-IDF
+        
+        tfidf_transformer = TfidfTransformer()
+        X_train_tfidf = tfidf_transformer.fit_transform(X_train_counts)
+        X_train_tfidf.shape
+
+        
+        ############################################ Naive, remove stoping word increases accuracy
+        #clf = MultinomialNB().fit(X_train_tfidf, y_train)
+        text_clf = Pipeline([('vect', CountVectorizer(stop_words='english')),
+                             ('tfidf', TfidfTransformer()),
+                             ('clf', MultinomialNB(fit_prior=False))])
+        text_clf = text_clf.fit(X_train, y_train)
+        """
+        predicted = text_clf.predict(X_test)
+        np.mean(predicted == y_test)
+
+        ############################################ NB # With stemming, accuracy reduced a little
+        nltk.download('stopwords')
+
+        from nltk.stem.snowball import SnowballStemmer
+        stemmer = SnowballStemmer("english", ignore_stopwords=True)
+        class StemmedCountVectorizer(CountVectorizer):
+            def build_analyzer(self):
+                analyzer = super(StemmedCountVectorizer, self).build_analyzer()
+                return lambda doc: ([stemmer.stem(w) for w in analyzer(doc)])
+
+        stemmed_count_vect = StemmedCountVectorizer(stop_words='english')
+
+        text_mnb_stemmed = Pipeline([('vect', stemmed_count_vect),
+                                     ('tfidf', TfidfTransformer()),
+                                     ('clf', MultinomialNB(fit_prior=False))])
+
+        text_mnb_stemmed = text_mnb_stemmed.fit(X_train, y_train)
+        predicted_mnb_stemmed = text_mnb_stemmed.predict(X_test)
+        np.mean(predicted_mnb_stemmed == y_test)
+        """
+        
+        ############################################# Second Best. Grid search Naive (without stemming, stemming reduces accuracy a little)
+        ############################################# Remove stoping word increases accuray
+        
+        parameters = {'vect__ngram_range': [(1, 1), (1, 2)],
+                      'tfidf__use_idf': (True, False),
+                      'clf__alpha': (1e-2, 1e-3)}
+
+        gs_clf = GridSearchCV(text_clf, parameters, n_jobs=-1)
+        gs_clf = gs_clf.fit(X_train, y_train)
+
+        gs_clf.best_score_
+        gs_clf.best_params_
+
+        gs_predicted = gs_clf.predict(X_test)
+        NB_accuracy_temp.append(np.mean(gs_predicted == y_test))
+
+
+        #plt.rcParams["figure.figsize"] = (20,20)
+
+        #Confusion matrix:
+        #model = gs_clf
+        #y_pred = gs_predicted
+        #conf_mat = skm.confusion_matrix(y_test, y_pred, labels=model.classes_)
+        #disp = skm.ConfusionMatrixDisplay(confusion_matrix=conf_mat, display_labels=model.classes_)
+        #disp.plot()
+        #plt.title("Naive Bayes Classifier. Includes Stop Words. No Stemming.", font={'size' : 20})
+        #plt.xticks(rotation = 45)
+        ##plt.savefig("Confusion Matrix.png", dpi=100)
+        #plt.show()
+
+        #Naive bayes end.
+        #SVM begin.
+
+        """
+        ############################################ 
+        ############################################ SVM Best. Remove stop words reduced accuray a little
+        from sklearn.linear_model import SGDClassifier
+        text_clf_svm = Pipeline([('vect', CountVectorizer(stop_words='english')),
+                                 ('tfidf', TfidfTransformer()),
+                                 ('clf-svm', SGDClassifier(loss='hinge', penalty='l2',
+                                                      alpha=1e-3, random_state=42))])
+        text_clf_svm = text_clf_svm.fit(X_train, y_train)
+        predicted_svm = text_clf_svm.predict(X_test)
+        np.mean(predicted_svm == y_test)
+
+        ############################################# grid search SVM, Accuracy is the same with no grid serach
+        from sklearn.model_selection import GridSearchCV
+        parameters_svm = {'vect__ngram_range': [(1, 1), (1, 2)],
+                          'tfidf__use_idf': (True, False),
+                          'clf-svm__alpha': (1e-2, 1e-3)}
+        gs_clf_svm = GridSearchCV(text_clf_svm, parameters_svm, n_jobs=-1)
+        gs_clf_svm = gs_clf_svm.fit(X_train, y_train)
+        gs_clf_svm.best_score_
+        gs_clf_svm.best_params_
+
+        gs_predicted_svm = gs_clf_svm.predict(X_test)
+        np.mean(gs_predicted_svm == y_test)
+        """
+        ############################################ SVM # with stemming, accuracy reduced a little
+        
+        stemmer = SnowballStemmer("english", ignore_stopwords=True)
+        class StemmedCountVectorizer(CountVectorizer):
+            def build_analyzer(self):
+                analyzer = super(StemmedCountVectorizer, self).build_analyzer()
+                return lambda doc: ([stemmer.stem(w) for w in analyzer(doc)])
+
+        stemmed_count_vect = StemmedCountVectorizer(stop_words='english')
+        text_clf_svm_stemmed = Pipeline([('vect', stemmed_count_vect),
+                                 ('tfidf', TfidfTransformer()),
+                                 ('clf-svm', SGDClassifier(loss='hinge', penalty='l2',
+                                                      alpha=1e-3, random_state=42))])
+        text_clf_svm_stemmed = text_clf_svm_stemmed.fit(X_train, y_train)
+        predicted_svm_stemmed = text_clf_svm_stemmed.predict(X_test)
+        SVM_accuracy_temp.append(np.mean(predicted_svm_stemmed == y_test))
+    NB_accuracy[k] = np.mean(NB_accuracy_temp)
+    SVM_accuracy[k] = np.mean(SVM_accuracy_temp)
+
+"""
+#0.6864899806076277
+
+#0.631578947368421
+
+y_test.unique()
+
+model = text_clf_svm_stemmed
+y_pred = predicted_svm_stemmed
+
+multi_conf_mat = skm.multilabel_confusion_matrix(y_test, y_pred, labels=model.classes_)
+
+skm.accuracy_score(y_test, y_pred)
+
+mul = 1
+for artist in model.classes_:
+    y_art_true = (y_test == artist).values*1
+    y_art_pred = (y_pred == artist)*1
+    print(artist)
+    print("Accuracy:", skm.accuracy_score(y_art_true, y_art_pred))
+    print("Precision:",skm.precision_score(y_art_true, y_art_pred))
+    print("Recall:", skm.recall_score(y_art_true, y_art_pred))
+    fpr, tpr, thresholds = skm.roc_curve(y_art_true, y_art_pred)
+    print("AUC:", skm.auc(fpr, tpr))
+
+#Source: https://towardsdatascience.com/confusion-matrix-for-your-multi-class-machine-learning-model-ff9aa3bf7826
+print('Micro Precision: {:.2f}'.format(skm.precision_score(y_test, y_pred, average='micro')))
+print('Micro Recall: {:.2f}'.format(skm.recall_score(y_test, y_pred, average='micro')))
+print('Micro F1-score: {:.2f}\n'.format(skm.f1_score(y_test, y_pred, average='micro')))
+
+print('Macro Precision: {:.2f}'.format(skm.precision_score(y_test, y_pred, average='macro')))
+print('Macro Recall: {:.2f}'.format(skm.recall_score(y_test, y_pred, average='macro')))
+print('Macro F1-score: {:.2f}\n'.format(skm.f1_score(y_test, y_pred, average='macro')))
+
+print('Weighted Precision: {:.2f}'.format(skm.precision_score(y_test, y_pred, average='weighted')))
+print('Weighted Recall: {:.2f}'.format(skm.recall_score(y_test, y_pred, average='weighted')))
+print('Weighted F1-score: {:.2f}\n'.format(skm.f1_score(y_test, y_pred, average='weighted')))
+
+print(skm.classification_report(y_test, y_pred, target_names=model.classes_))
+
+#skm.roc_curve(y_test, y_pred, pos_label=2)
+
+
+
+#cm = confusion_matrix(y_test, predictions, labels=clf.classes_)
+#disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=clf.classes_)
+conf_mat = skm.confusion_matrix(y_test, y_pred, labels=model.classes_)
+disp = skm.ConfusionMatrixDisplay(confusion_matrix=conf_mat, display_labels=model.classes_)
+disp.plot()
+plt.xticks(rotation = 45)
+plt.savefig("Confusion Matrix.png", dpi=100)
+plt.show()
+
+y_test.unique()
+"""
+
+
+# In[2]:
+
+
+NB_accuracy
+
+
+# In[3]:
+
+
+SVM_accuracy
+
+
+# In[5]:
+
+
+plt.plot(NB_accuracy.keys(), NB_accuracy.values())
+plt.plot(SVM_accuracy.keys(), SVM_accuracy.values())
+
+
+# In[13]:
+
+
+plt.plot(NB_accuracy.keys(), NB_accuracy.values(), label="Naive Bayes")
+plt.plot(SVM_accuracy.keys(), SVM_accuracy.values(), label="Support Vector Machine")
+plt.title("Accuracy for Naive Bayes and SVM Against Number of Artist")
+plt.legend()
+plt.savefig("accuracy_against_num_artist.png")
+
+
+# In[11]:
+
+
+plt.scatter(NB_accuracy.keys(), NB_accuracy.values(), label="Naive Bayes")
+plt.scatter(SVM_accuracy.keys(), SVM_accuracy.values(), label="Support Vector Machine")
+plt.title("Accuracy for Naive Bayes and SVM Against Number of Artist")
+plt.legend()
+plt.savefig("accuracy_against_num_artist_scatter.png")
+
+
+# In[9]:
+
+
+NB_accuracy
+
+
+# In[10]:
+
+
+SVM_accuracy
+
+
+# In[ ]:
+
+
+
+
